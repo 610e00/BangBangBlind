@@ -1,7 +1,6 @@
 // 🚨 緊急通知核心模組
+const contactModel = require("../db/contactModel");// SQLite 聯絡人 Model
 
-// 引入聯絡人模組
-const contactService = require("./contactService");
 // LINE Push 模組
 const { sendPushMessage } = require("./lineService");
 const db = require("./dbService");//引入資料庫模組
@@ -10,16 +9,34 @@ const db = require("./dbService");//引入資料庫模組
  */
 async function sendSOS(reason, gpsData, targetName = null, source = "system") {
 
-    // 🧠 取得聯絡人資料
-    const contact = contactService.resolveContact(targetName);
+/*
+=================================
+取得最高優先聯絡人
+目前 Demo 固定 user_id = 1
 
+之後 LINE webhook 接進來後
+改成真正 user_id
+=================================
+*/
+const contact = contactModel.getTopPriorityContact(1);
+
+/*
+=================================
+找不到聯絡人
+=================================
+*/
+if (!contact) {
+
+    throw new Error("找不到緊急聯絡人");
+
+}
     // 🧠 建立 SOS 訊息
     const alertMessage = {
         status: "SOS_SENT",
         source: source, // 👈 這個就是AI對接用
 
         // 聯絡人資訊
-        contact_name: contact.name,
+        contact_name: contact.contact_name,
         contact_phone: contact.phone,
 
         // SOS 原因
@@ -40,16 +57,15 @@ async function sendSOS(reason, gpsData, targetName = null, source = "system") {
 // LINE Push 通知
 // =========================
 
-// 先用固定測試帳號
-// 之後可以改成 contact.lineUserId
-
-const demoUserId = "U67d09829a90c4cb10ba5c251d61abfa2"
+//引入 LINE 測試帳號
+require("dotenv").config();
+const demoUserId = process.env.LINE_DEMO_USER_ID;
 
 // 組合 LINE 訊息
 const lineMessage =
 `🚨 SOS 緊急通知
 
-聯絡人：${contact.name}
+聯絡人：${contact.contact_name}
 
 原因：${reason}
 
@@ -64,10 +80,18 @@ if (!demoUserId) {
     throw new Error("LINE userId 是空的");
 }
 // 發送 LINE
-await sendPushMessage(
-    demoUserId,
-    lineMessage
-);
+try {
+
+    await sendPushMessage(
+        demoUserId,
+        lineMessage
+    );
+
+} catch (error) {
+
+    console.error("LINE 通知失敗：", error.message);
+
+}
 // =========================
 // 📦 寫入 SOS 紀錄到 DB
 // =========================
@@ -78,7 +102,7 @@ const sosRecord = {
     id: Date.now(),
     status: "SOS_SENT",
     source,
-    contact_name: contact.name,
+    contact_name: contact.contact_name,
     contact_phone: contact.phone,
     reason,
     location: gpsData,
@@ -93,7 +117,7 @@ db.writeDB(data);
     return {
         action: "sos_sent",
         status: "success",
-        target_name: contact.name,
+        target_name:contact.contact_name,
         source: source,
         message: "SOS sent successfully",
         data: alertMessage
