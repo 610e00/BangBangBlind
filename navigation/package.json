@@ -1,0 +1,23 @@
+{
+  "name": "navigation-module",
+  "version": "1.0.0",
+  "description": "- Android / JS：camelCase\r - Python：snake_case\r - 禁止：data / temp / value / test",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.16.1",
+    "better-sqlite3": "^12.10.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "node-gyp": "^12.4.0"
+  }
+}

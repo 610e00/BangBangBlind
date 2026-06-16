@@ -1,0 +1,17 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+
+# SQLite database
+db/navigation.db
+
+# 測試資料庫
+test.db
+
+# VSCode
+.vscode/
+
+# Logs
+*.log
