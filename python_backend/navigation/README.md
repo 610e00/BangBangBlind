@@ -247,7 +247,34 @@ GET /api/navigation/:user\_id
 
 
 \---
+\### Navigation Start
 
+POST /api/navigation/start
+
+導航中：
+
+{
+  "status": "success",
+  "message": "導航中",
+  "data": {
+    "instruction": "直走50公尺後左轉",
+    "distance_to_next_cm": 5000,
+    "arrived": false
+  }
+}
+
+已抵達：
+
+{
+  "status": "success",
+  "message": "已抵達目的地",
+  "data": {
+    "instruction": "您已抵達目的地",
+    "distance_to_next_cm": 0,
+    "arrived": true
+  }
+}
+\---
 
 
 \### SOS
