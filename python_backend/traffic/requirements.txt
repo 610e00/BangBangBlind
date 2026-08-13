@@ -1,0 +1,5 @@
+ultralytics==8.4.98
+paddleocr
+paddlepaddle==3.2.2
+opencv-python-headless
+torch
