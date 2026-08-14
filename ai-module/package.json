@@ -1,0 +1,26 @@
+{
+  "name": "ai-module",
+  "version": "1.0.0",
+  "description": "AI interaction module for voice intent, safety events, face announcements and prioritized TTS.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check aiController.js && node --check server.js && node --check ttsManager.js",
+    "test": "node tests/test.js",
+    "test:integration": "node tests/testDay29.js",
+    "test:safety": "node tests/testSafetyController.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "gtts": "^0.2.1",
+    "mic": "^2.1.2",
+    "multer": "^2.2.0",
+    "openai": "^6.39.0"
+  }
+}
