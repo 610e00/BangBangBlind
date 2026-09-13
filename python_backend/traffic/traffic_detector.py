@@ -177,8 +177,7 @@ class TrafficDetector:
         self,
         image_path,
         yolo_conf=0.25,
-        signal_conf_threshold=0.50,
-        ocr_conf_threshold=0.80
+        signal_conf_threshold=0.50
     ):
         """
         辨識單張圖片中的行人號誌。
@@ -414,16 +413,13 @@ class TrafficDetector:
             ocr_result_payload["seconds"]
         )
 
-        ocr_confidence = float(
-            ocr_result_payload["confidence"]
+        seconds_remaining = int(
+            ocr_result_payload["seconds"]
         )
 
-        if ocr_confidence < ocr_conf_threshold:
-            is_safe_to_cross = False
-        else:
-            is_safe_to_cross = (
-                seconds_remaining >= 15
-            )
+        is_safe_to_cross = (
+            seconds_remaining >= 15
+        )
 
         return self._traffic_response(
             light_detected=True,
