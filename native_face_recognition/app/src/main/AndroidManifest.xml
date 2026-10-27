@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        組員A：相機權限
+        保留給 CameraX 即時影像功能使用。
+        本次真人照片測試不需要啟動相機。
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
+        允許沒有實體相機的裝置安裝 App，
+        方便使用 Android 模擬器測試。
+    -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!-- Android 11 以上：允許查詢裝置上的語音辨識服務 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FaceRecognition">
+
+        <!--
+            組員A：原本的 CameraX 主畫面。
+
+            目前不作為 App 啟動入口。
+            後續整合即時辨識時會使用。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+
+        <!--
+            組員A：照片偵測測試。
+
+            功能：
+            1. MediaPipe 人臉偵測
+            2. Bounding Box
+            3. Face Crop
+            4. 人臉品質檢查
+            5. 112x112 Bitmap 輸出
+
+            保留程式，不刪除。
+        -->
+        <activity
+            android:name=".PhotoTestActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!--
+            組員A：Face Tracking 測試。
+
+            利用模擬座標測試人臉 ID 是否維持一致。
+        -->
+        <activity
+            android:name=".TrackingTestActivity"
+            android:exported="false" />
+
+        <!--
+            組員B：MobileFaceNet 核心功能測試。
+
+            已測試：
+            1. TensorFlow Lite 模型載入
+            2. 兩組 128 維特徵向量輸出
+            3. Cosine Similarity 數學計算
+
+            保留這個測試入口，但目前不設為啟動畫面。
+        -->
+        <activity
+            android:name=".MobileFaceNetTestActivity"
+            android:exported="false" />
+
+        <!--
+            組員B：真人照片前處理測試。
+
+            【目前 App 的啟動畫面】
+
+            測試內容：
+            1. 讀取 assets 中的四張真人照片
+            2. 使用 MediaPipe 偵測人臉
+            3. 使用 FaceCropper 裁切人臉
+            4. 確認輸出 112x112 Bitmap
+
+            下一階段：
+            將裁切後的人臉送入 MobileFaceNet，
+            計算同一人與不同人的 Cosine Similarity。
+        -->
+        <activity
+            android:name=".FamiliarSpeechIntegrationTestActivity"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+        <activity
+            android:name=".FamiliarPeopleActivity"
+            android:exported="false" />
+
+
+    </application>
+
+</manifest>
