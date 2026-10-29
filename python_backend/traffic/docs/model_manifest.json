@@ -1,0 +1,18 @@
+{
+  "models": [
+    {
+      "path": "python_backend/traffic/models/best_v5.pt",
+      "bytes": 22623210,
+      "sha256": "5424087f2bda79d9c1cb0ac7889f46ce9790fdd6803a274aeea5a7929bef38d8"
+    },
+    {
+      "path": "python_backend/traffic/models/final_v3_recognizer_9I2D_E3.pt",
+      "bytes": 2022837,
+      "sha256": "668b76522f85126632ee3e65da83743e4b80519edd1ff064b04adb9f496bbe2c"
+    }
+  ],
+  "frozen_source_rename_equivalence": {
+    "countdown_segmenter_v4.py": true,
+    "digit_recognizer_v3.py": true
+  }
+}
