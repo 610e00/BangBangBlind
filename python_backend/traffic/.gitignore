@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
+.venv/
+venv/
+.env
+.DS_Store
+# Model checkpoints are intentionally included for this reviewed module delivery.

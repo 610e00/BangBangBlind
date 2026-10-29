@@ -1,5 +1,10 @@
-ultralytics==8.4.98
-paddleocr
-paddlepaddle==3.2.2
-opencv-python-headless
-torch
+# Known working versions from the existing inference environment. Python 3.11 recommended.
+fastapi==0.128.8
+uvicorn==0.39.0
+python-multipart==0.0.20
+pydantic==2.13.5
+numpy==1.26.4
+Pillow==11.3.0
+opencv-python==4.11.0.86
+torch==2.8.0
+ultralytics==8.4.172
