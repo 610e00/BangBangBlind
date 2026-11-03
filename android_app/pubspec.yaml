@@ -25,6 +25,8 @@ dependencies:
   flutter_tts: ^4.2.5
   vibration: ^3.2.1
   uvc_android_flutter: ^0.2.4
+  camera: ^0.12.2
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:
