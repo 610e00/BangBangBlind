@@ -1,517 +1,718 @@
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:vibration/vibration.dart';
 
 import 'obstacle_decision.dart';
 
+// ====================================
+// 共用 TTS 服務接口
+// ====================================
+
+typedef ObstacleSpeechRequest =
+    Future<void> Function(
+  String text,
+  int priority,
+);
+
+// ====================================
+// 共用音效服務接口
+// ====================================
+
+typedef ObstacleToneRequest =
+    Future<void> Function(
+  ObstacleToneEvent event,
+);
+
+// ====================================
+// 提示音種類
+// ====================================
+
+enum ObstacleToneKind {
+  frontDouble,
+  leftDouble,
+  rightDouble,
+
+  frontFast,
+  leftFast,
+  rightFast,
+
+  stop,
+}
+
+class ObstacleToneEvent {
+  final ObstacleToneKind kind;
+  final int priority;
+  final Uint8List? wavBytes;
+
+  const ObstacleToneEvent({
+    required this.kind,
+    required this.priority,
+    this.wavBytes,
+  });
+}
+
+// ====================================
+// 避障警示服務
+// ====================================
 
 class ObstacleAlert {
   ObstacleAlert({
-    this.enableSideSpeech = true,
+    this.onSpeechRequested,
+    this.onToneRequested,
   });
 
+  final ObstacleSpeechRequest? onSpeechRequested;
+  final ObstacleToneRequest? onToneRequested;
 
-  // ==============================
-  // 是否開啟側邊語音
-  //
-  // 現在只有手機單顆震動馬達，
-  // 無法真正表達 LEFT / RIGHT，
-  // 所以 demo / 測試階段預設 true。
-  //
-  // 未來接左右外部震動器後，
-  // 可改成 false。
-  // ==============================
+  // 同一個物件是否已經叮兩聲
+  final Set<int> _dingedTrackIds = {};
 
-  final bool enableSideSpeech;
+  // 同一個物件是否已經播報 TTS
+  final Set<int> _spokenTrackIds = {};
 
+  // 快速短音的節奏控制
+  int? _lastFastTrackId;
+  ObstacleToneKind? _lastFastToneKind;
+  DateTime? _lastFastToneAt;
 
-  final FlutterTts _flutterTts =
-      FlutterTts();
+  // 快速短音每 0.6 秒一次
+  static const Duration _fastInterval =
+      Duration(milliseconds: 600);
 
+  // 避免提示音同時重疊播放
+  bool _toneBusy = false;
+  bool _hasTone = false;
 
-  // ==============================
-  // TTS 狀態
-  // ==============================
+  // 音效失效控制
+  int _toneEpoch = 0;
 
-  String? _lastSpokenKey;
+  AudioPlayer? _tonePlayer;
 
-  DateTime? _lastSpokenTime;
+  // 已產生的音效快取
+  final Map<ObstacleToneKind, Uint8List>
+      _soundCache = {};
 
-
-  // 同一個危險持續很久時，
-  // 每隔一段時間才允許再提醒一次。
-  //
-  // 5 秒目前是暫定值，
-  // 後續要使用者測試。
-  static const Duration
-      _ttsRepeatInterval =
-      Duration(
-    seconds: 5,
-  );
-
-
-  // ==============================
-  // 震動狀態
-  // ==============================
-
-  DateTime? _lastVibrationTime;
-
-  int _lastVibrationRiskLevel = 0;
-
-
-  static const Duration
-      _vibrationCooldown =
-      Duration(
-    milliseconds: 800,
-  );
-
-
-  // ==============================
-  // 初始化 TTS
-  // ==============================
+  // ====================================
+  // 初始化
+  // ====================================
 
   Future<void> initialize() async {
-    await _flutterTts.setLanguage(
-      'zh-TW',
-    );
+    if (onToneRequested == null &&
+        _tonePlayer == null) {
+      final player = AudioPlayer();
 
-    await _flutterTts.setSpeechRate(
-      0.5,
-    );
+      await player.setPlayerMode(
+        PlayerMode.lowLatency,
+      );
 
-    await _flutterTts.setVolume(
-      1.0,
-    );
+      await player.setReleaseMode(
+        ReleaseMode.stop,
+      );
 
-    await _flutterTts.setPitch(
-      1.0,
-    );
+      // 先用較溫和的音量測試
+      await player.setVolume(0.55);
+
+      _tonePlayer = player;
+    }
+
+    if (onSpeechRequested == null) {
+      debugPrint(
+        'ObstacleAlert：尚未接上共用 TTS，'
+      );
+    }
   }
 
+  // ====================================
+  // 清除已失效的追蹤 ID
+  // ====================================
 
-  // ==============================
-  // 收到 Decision 結果
-  // ==============================
+  void retainTracks(Set<int> activeIds) {
+    _dingedTrackIds.removeWhere(
+      (id) => !activeIds.contains(id),
+    );
+
+    _spokenTrackIds.removeWhere(
+      (id) => !activeIds.contains(id),
+    );
+
+    if (_lastFastTrackId != null &&
+        !activeIds.contains(_lastFastTrackId)) {
+      _lastFastTrackId = null;
+      _lastFastToneKind = null;
+      _lastFastToneAt = null;
+    }
+  }
+
+  // ====================================
+  // 接收 Decision 結果
+  // ====================================
 
   Future<void> handle(
     ObstacleDecisionResult result,
   ) async {
-    // --------------------------------
-    // 沒有危險
-    // --------------------------------
-
+    // 沒有有效障礙物
     if (result.warningType ==
         ObstacleWarningType.none) {
-      _resetAlertState();
-
-      await Vibration.cancel();
-
+      await _stopTone();
       return;
     }
 
+    final obstacle = result.obstacle;
+    final trackId = result.trackId;
 
-    final obstacle =
-        result.obstacle;
-
-    if (obstacle == null) {
+    if (obstacle == null || trackId == null) {
       return;
     }
 
+    // =================================
+    // 判斷是否已進入 1.5m
+    // =================================
 
-    // ==============================
-    // 正前方預警
-    // ==============================
+    final isNear =
+        result.warningType ==
+            ObstacleWarningType.frontDanger ||
+        result.warningType ==
+            ObstacleWarningType.sideCritical;
 
-    if (result.warningType ==
-        ObstacleWarningType.frontWarning) {
-      await _vibrateFrontWarning();
+    // =================================
+    // 是否位於正中
+    // =================================
 
+    final isFront =
+        result.direction ==
+            ObstacleDirection.center;
+
+    // =================================
+    // 左、中、右聲道
+    // =================================
+
+    final bool isLeft =
+        result.direction ==
+            ObstacleDirection.left ||
+        result.direction ==
+            ObstacleDirection.leftCenter;
+
+    final bool isRight =
+        result.direction ==
+            ObstacleDirection.right ||
+        result.direction ==
+            ObstacleDirection.rightCenter;
+
+    late final ObstacleToneKind doubleTone;
+    late final ObstacleToneKind fastTone;
+
+    if (isFront) {
+      doubleTone = ObstacleToneKind.frontDouble;
+      fastTone = ObstacleToneKind.frontFast;
+    } else if (isLeft) {
+      doubleTone = ObstacleToneKind.leftDouble;
+      fastTone = ObstacleToneKind.leftFast;
+    } else if (isRight) {
+      doubleTone = ObstacleToneKind.rightDouble;
+      fastTone = ObstacleToneKind.rightFast;
+    } else {
       return;
     }
 
+    final priority = isNear ? 2 : 3;
+    final now = DateTime.now();
 
-    // ==============================
-    // 正前方危險
-    // ==============================
+    // =================================
+    // 第一階段：第一次進入警示範圍
+    // =================================
 
-    if (result.warningType ==
-        ObstacleWarningType.frontDanger) {
-      await _vibrateFrontDanger();
+    final firstWarning =
+        _dingedTrackIds.add(trackId);
 
-      await _speakFrontDanger(
-        obstacle.objectType,
-        result.direction,
+    if (firstWarning) {
+      _requestTone(
+        ObstacleToneEvent(
+          kind: doubleTone,
+          priority: priority,
+          wavBytes: _soundFor(doubleTone),
+        ),
       );
 
-      return;
+
+      if (isNear) {
+        _lastFastTrackId = trackId;
+        _lastFastToneKind = fastTone;
+        _lastFastToneAt = now;
+      }
     }
 
+    // =================================
+    // 第二階段：1.5m 持續快速短音
+    // =================================
 
-    // ==============================
-    // 左 / 右側危險
-    // ==============================
+    else if (isNear) {
+      final isDifferentFastTone =
+          _lastFastTrackId != trackId ||
+          _lastFastToneKind != fastTone;
 
-    if (result.warningType ==
-        ObstacleWarningType.sideDanger) {
-      await _vibrateSideDanger(
-        result.direction,
-      );
+      if (isDifferentFastTone) {
+        _lastFastTrackId = trackId;
+        _lastFastToneKind = fastTone;
+        _lastFastToneAt = null;
+      }
 
+      final intervalPassed =
+          _lastFastToneAt == null ||
+          now.difference(_lastFastToneAt!) >=
+              _fastInterval;
 
-      // 現階段手機只有一顆震動馬達，
-      // 所以可暫時用語音補足方向資訊。
-      if (enableSideSpeech) {
-        await _speakSideDanger(
-          obstacle.objectType,
-          result.direction,
+      if (intervalPassed) {
+        _lastFastToneAt = now;
+
+        _requestTone(
+          ObstacleToneEvent(
+            kind: fastTone,
+            priority: 2,
+            wavBytes: _soundFor(fastTone),
+          ),
         );
       }
     }
-  }
 
+    // =================================
+    // 從 1.5m 回到 2m
+    // =================================
 
-  // ==============================
-  // 正前方預警
-  // ==============================
-
-  Future<void>
-      _vibrateFrontWarning() async {
-    await _vibratePattern(
-      pattern: const [
-        0,
-        200,
-        700,
-        200,
-      ],
-      riskLevel: 1,
-    );
-  }
-
-
-  // ==============================
-  // 正前方危險
-  // ==============================
-
-  Future<void>
-      _vibrateFrontDanger() async {
-    await _vibratePattern(
-      pattern: const [
-        0,
-        120,
-        100,
-        120,
-        100,
-        120,
-      ],
-      riskLevel: 3,
-    );
-  }
-
-
-  // ==============================
-  // 側邊危險
-  // ==============================
-
-  Future<void> _vibrateSideDanger(
-    ObstacleDirection? direction,
-  ) async {
-    if (direction ==
-        ObstacleDirection.leftCenter) {
-      debugPrint(
-        '左側障礙物：LEFT vibration',
-      );
-    } else if (direction ==
-        ObstacleDirection.rightCenter) {
-      debugPrint(
-        '右側障礙物：RIGHT vibration',
-      );
+    else {
+      _lastFastTrackId = null;
+      _lastFastToneKind = null;
+      _lastFastToneAt = null;
     }
 
+    // =================================
+    // 左右兩側不播放 TTS
+    // =================================
 
-    await _vibratePattern(
-      pattern: const [
-        0,
-        300,
-      ],
-      riskLevel: 2,
-    );
-  }
-
-
-  // ==============================
-  // 統一處理震動
-  //
-  // 規則：
-  //
-  // 相同 / 更低風險
-  // → 受到 800ms cooldown 限制
-  //
-  // 風險升級
-  // → 立即震動
-  //
-  // 例如：
-  //
-  // frontWarning (1)
-  // → frontDanger (3)
-  //
-  // 不會被前一次 warning
-  // 的 cooldown 擋掉。
-  // ==============================
-
-  Future<void> _vibratePattern({
-    required List<int> pattern,
-    required int riskLevel,
-  }) async {
-    final DateTime now =
-        DateTime.now();
-
-
-    final bool riskIncreased =
-        riskLevel >
-            _lastVibrationRiskLevel;
-
-
-    bool cooldownPassed = true;
-
-
-    if (_lastVibrationTime != null) {
-      final Duration difference =
-          now.difference(
-        _lastVibrationTime!,
-      );
-
-      cooldownPassed =
-          difference >=
-              _vibrationCooldown;
-    }
-
-
-    // 沒有升級，
-    // 而且 cooldown 還沒過，
-    // 就不重新震。
-    if (!riskIncreased &&
-        !cooldownPassed) {
+    if (!isFront) {
       return;
     }
 
+    // =================================
+    // 正中首次 TTS
+    //
+    // 同一個 trackId 只說一次。
+    // =================================
 
-    // 如果是風險升級，
-    // 先取消前一個低風險震動，
-    // 再立即播放更急迫的震動。
-    if (riskIncreased &&
-        _lastVibrationTime != null) {
-      await Vibration.cancel();
-    }
-
-
-    _lastVibrationTime = now;
-
-    _lastVibrationRiskLevel =
-        riskLevel;
-
-
-    await Vibration.vibrate(
-      pattern: pattern,
-    );
-  }
-
-
-  // ==============================
-  // 正前方危險語音
-  // ==============================
-
-  Future<void> _speakFrontDanger(
-    String objectType,
-    ObstacleDirection? direction,
-  ) async {
-    final String key =
-        'front-'
-        '$objectType-'
-        '${direction?.name}';
-
-
-    if (!_canSpeakAgain(key)) {
+    if (!_spokenTrackIds.add(trackId)) {
       return;
     }
 
-
-    final String obstacleName =
-        _getChineseObstacleName(
-      objectType,
+    final message = _getSpeechMessage(
+      obstacle.stableObjectType,
     );
 
-
-    await _speak(
-      key: key,
-      text:
-          '前方有$obstacleName，請注意。',
+    unawaited(
+      _sendSpeech(
+        message,
+        priority,
+      ),
     );
   }
 
+  // ====================================
+  // 執行短音
+  // ====================================
 
-  // ==============================
-  // 側邊危險語音
-  //
-  // 只是目前單馬達階段
-  // 暫時補足左右方向。
-  // ==============================
-
-  Future<void> _speakSideDanger(
-    String objectType,
-    ObstacleDirection? direction,
-  ) async {
-    final String directionText;
-
-
-    if (direction ==
-        ObstacleDirection.leftCenter) {
-      directionText = '左前方';
-    } else if (direction ==
-        ObstacleDirection.rightCenter) {
-      directionText = '右前方';
-    } else {
-      directionText = '側前方';
-    }
-
-
-    final String key =
-        'side-'
-        '$objectType-'
-        '${direction?.name}';
-
-
-    if (!_canSpeakAgain(key)) {
-      return;
-    }
-
-
-    final String obstacleName =
-        _getChineseObstacleName(
-      objectType,
-    );
-
-
-    await _speak(
-      key: key,
-      text:
-          '$directionText有'
-          '$obstacleName，請注意。',
-    );
-  }
-
-
-  // ==============================
-  // 判斷 TTS 能不能再講
-  // ==============================
-
-  bool _canSpeakAgain(
-    String key,
+  void _requestTone(
+    ObstacleToneEvent event,
   ) {
-    // 不同事件
-    // → 立即講
-    if (_lastSpokenKey != key) {
-      return true;
+    if (_toneBusy) {
+      return;
     }
 
+    _hasTone = true;
 
-    // 理論上很少發生，
-    // 防呆。
-    if (_lastSpokenTime == null) {
-      return true;
-    }
+    final epoch = _toneEpoch;
 
+    _toneBusy = true;
 
-    final Duration difference =
-        DateTime.now().difference(
-      _lastSpokenTime!,
-    );
-
-
-    // 同一危險持續太久，
-    // 超過間隔才再提醒。
-    return difference >=
-        _ttsRepeatInterval;
-  }
-
-
-  // ==============================
-  // 真正執行 TTS
-  // ==============================
-
-  Future<void> _speak({
-    required String key,
-    required String text,
-  }) async {
-    _lastSpokenKey = key;
-
-    _lastSpokenTime =
-        DateTime.now();
-
-
-    // 避障屬於高優先級
-    // 先停止上一段 TTS。
-    await _flutterTts.stop();
-
-
-    await _flutterTts.speak(
-      text,
+    unawaited(
+      _playTone(event, epoch).whenComplete(() {
+        _toneBusy = false;
+      }),
     );
   }
 
+  Future<void> _playTone(
+    ObstacleToneEvent event,
+    int epoch,
+  ) async {
+    try {
+      if (epoch != _toneEpoch) {
+        return;
+      }
 
-  // ==============================
-  // 英文類別 → 中文
-  // ==============================
+      // 優先交給整合端的共用音訊服務
+      if (onToneRequested != null) {
+        await onToneRequested!(event);
+        return;
+      }
 
-  String _getChineseObstacleName(
-    String objectType,
+      // 尚未整合共用提示音時，
+      // 使用 audioplayers 備援播放
+      final player = _tonePlayer;
+
+      if (player == null ||
+          event.wavBytes == null) {
+        return;
+      }
+
+      await player.stop();
+
+      if (epoch != _toneEpoch) {
+        return;
+      }
+
+      await player.play(
+        BytesSource(
+          event.wavBytes!,
+          mimeType: 'audio/wav',
+        ),
+      );
+    } catch (error) {
+      debugPrint(
+        '避障提示音播放失敗：$error',
+      );
+    }
+  }
+
+  // ====================================
+  // 停止提示音
+  // ====================================
+
+  Future<void> _stopTone() async {
+    if (!_hasTone) {
+      return;
+    }
+
+    _hasTone = false;
+
+    _toneEpoch++;
+
+    _lastFastTrackId = null;
+    _lastFastToneKind = null;
+    _lastFastToneAt = null;
+
+    try {
+      if (onToneRequested != null) {
+        await onToneRequested!(
+          const ObstacleToneEvent(
+            kind: ObstacleToneKind.stop,
+            priority: 2,
+          ),
+        );
+      } else {
+        await _tonePlayer?.stop();
+      }
+    } catch (error) {
+      debugPrint(
+        '停止避障提示音失敗：$error',
+      );
+    }
+  }
+
+  // ====================================
+  // TTS 交由 AudioPriorityService
+  // ====================================
+
+  Future<void> _sendSpeech(
+    String text,
+    int priority,
+  ) async {
+    try {
+      if (onSpeechRequested == null) {
+        debugPrint(
+          '預計播報 TTS：'
+          'priority=$priority，$text',
+        );
+        return;
+      }
+
+      await onSpeechRequested!(
+        text,
+        priority,
+      );
+    } catch (error) {
+      debugPrint(
+        '共用 TTS 播報失敗：$error',
+      );
+    }
+  }
+
+  // ====================================
+  // 攝影機異常播報
+  // ====================================
+
+  Future<void> announceCameraFailure() async {
+    await _sendSpeech(
+      '攝影機連線異常，'
+      '避障功能暫時無法使用。',
+      2,
+    );
+  }
+
+  // ====================================
+  // 取得中文語音內容
+  // ====================================
+
+  String _getSpeechMessage(
+    String? objectType,
   ) {
-    switch (
-        objectType
-            .trim()
-            .toLowerCase()) {
+    switch (objectType?.trim().toLowerCase()) {
       case 'pole':
-        return '電線桿';
+        return '前電線桿';
 
       case 'transformer box':
-        return '變電箱';
+        return '前變電箱';
 
       case 'ground billboard':
-        return '廣告看板';
+        return '前廣告看板';
 
       case 'rear overhang':
-        return '車尾懸掛障礙物';
+        return '前車尾突出物';
 
       default:
-        return '障礙物';
+        return '前障礙物';
     }
   }
 
+  // ====================================
+  // 取得或產生短音
+  // ====================================
 
-  // ==============================
-  // 危險解除
-  // ==============================
-
-  void _resetAlertState() {
-    _lastSpokenKey = null;
-
-    _lastSpokenTime = null;
-
-    _lastVibrationTime = null;
-
-    _lastVibrationRiskLevel = 0;
+  Uint8List _soundFor(
+    ObstacleToneKind kind,
+  ) {
+    return _soundCache.putIfAbsent(
+      kind,
+      () => _generateStereoWav(kind),
+    );
   }
 
+  // ====================================
+  // 產生柔和的立體聲「叮」聲
+  //
+  // 2m：兩聲，一組 WAV
+  // 1.5m：單聲，每 0.6 秒觸發
+  // ====================================
 
-  // ==============================
-  // 停止所有警示
-  // ==============================
+  Uint8List _generateStereoWav(
+    ObstacleToneKind kind,
+  ) {
+    const int sampleRate = 22050;
+    const int channels = 2;
+    const int bitsPerSample = 16;
+
+    // 每個叮聲約 0.13 秒
+    const double dingDuration = 0.13;
+
+    // 兩聲開始時間相隔 0.25 秒
+    const double secondDingStart = 0.25;
+
+    final bool isDouble =
+        kind == ObstacleToneKind.frontDouble ||
+        kind == ObstacleToneKind.leftDouble ||
+        kind == ObstacleToneKind.rightDouble;
+
+    final bool isFront =
+        kind == ObstacleToneKind.frontDouble ||
+        kind == ObstacleToneKind.frontFast;
+
+    final bool isLeft =
+        kind == ObstacleToneKind.leftDouble ||
+        kind == ObstacleToneKind.leftFast;
+
+    final bool isRight =
+        kind == ObstacleToneKind.rightDouble ||
+        kind == ObstacleToneKind.rightFast;
+
+    final bool leftEnabled = isFront || isLeft;
+    final bool rightEnabled = isFront || isRight;
+
+    final totalDuration = isDouble
+        ? secondDingStart + dingDuration
+        : dingDuration;
+
+    final sampleCount =
+        (sampleRate * totalDuration).round();
+
+    final dataSize =
+        sampleCount * channels * 2;
+
+    final wav = ByteData(44 + dataSize);
+
+    void writeText(int offset, String value) {
+      for (int i = 0; i < value.length; i++) {
+        wav.setUint8(
+          offset + i,
+          value.codeUnitAt(i),
+        );
+      }
+    }
+
+    // WAV header
+    writeText(0, 'RIFF');
+
+    wav.setUint32(
+      4,
+      36 + dataSize,
+      Endian.little,
+    );
+
+    writeText(8, 'WAVE');
+    writeText(12, 'fmt ');
+
+    wav.setUint32(16, 16, Endian.little);
+    wav.setUint16(20, 1, Endian.little);
+    wav.setUint16(22, channels, Endian.little);
+
+    wav.setUint32(
+      24,
+      sampleRate,
+      Endian.little,
+    );
+
+    wav.setUint32(
+      28,
+      sampleRate * channels * 2,
+      Endian.little,
+    );
+
+    wav.setUint16(
+      32,
+      channels * 2,
+      Endian.little,
+    );
+
+    wav.setUint16(
+      34,
+      bitsPerSample,
+      Endian.little,
+    );
+
+    writeText(36, 'data');
+
+    wav.setUint32(
+      40,
+      dataSize,
+      Endian.little,
+    );
+
+    // 同一個柔和音色，
+    const double frequency = 620.0;
+
+    for (int i = 0; i < sampleCount; i++) {
+      final double time = i / sampleRate;
+
+      // 兩聲各自有自己的起音和衰減
+      double localTime = time;
+
+      if (isDouble && time >= secondDingStart) {
+        localTime = time - secondDingStart;
+      }
+
+      double signal = 0;
+
+      if (localTime >= 0 &&
+          localTime < dingDuration) {
+        // 柔和的淡入
+        final fadeIn =
+            (localTime / 0.008)
+                .clamp(0.0, 1.0)
+                .toDouble();
+
+        // 模擬鈴聲逐漸衰減
+        final decay =
+            math.exp(-localTime * 19.0);
+
+        // 結尾淡出，避免爆音
+        final fadeOut =
+            ((dingDuration - localTime) / 0.015)
+                .clamp(0.0, 1.0)
+                .toDouble();
+
+        final envelope =
+            fadeIn * decay * fadeOut;
+
+        final fundamental = math.sin(
+          2 * math.pi * frequency * localTime,
+        );
+
+        final harmonic = math.sin(
+          2 * math.pi * frequency * 1.5 * localTime,
+        );
+
+        signal =
+            (fundamental * 0.85 +
+             harmonic * 0.15) *
+            envelope *
+            0.25;
+      }
+
+      final sample =
+          (signal * 32767).round();
+
+      final leftSample =
+          leftEnabled ? sample : 0;
+
+      final rightSample =
+          rightEnabled ? sample : 0;
+
+      final offset = 44 + i * 4;
+
+      wav.setInt16(
+        offset,
+        leftSample,
+        Endian.little,
+      );
+
+      wav.setInt16(
+        offset + 2,
+        rightSample,
+        Endian.little,
+      );
+    }
+
+    return wav.buffer.asUint8List();
+  }
+
+  // ====================================
+  // 重設警示
+  // ====================================
+
+  Future<void> reset() async {
+    await _stopTone();
+
+    _dingedTrackIds.clear();
+    _spokenTrackIds.clear();
+
+    _lastFastTrackId = null;
+    _lastFastToneKind = null;
+    _lastFastToneAt = null;
+  }
+
+  // ====================================
+  // 停止避障服務
+  // ====================================
 
   Future<void> stop() async {
-    await Vibration.cancel();
+    await reset();
 
-    await _flutterTts.stop();
+    final player = _tonePlayer;
+    _tonePlayer = null;
 
-    _resetAlertState();
+    if (player != null) {
+      await player.dispose();
+    }
+
+    // 不關閉全 App 共用 AudioPriorityService。
   }
 }
