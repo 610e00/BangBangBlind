@@ -16,7 +16,11 @@
 const axios = require("axios");
 
 // 多靠近才判定「已經走到這個路口」，避免 GPS 飄動造成誤判換句過快
-const STEP_ARRIVAL_RADIUS_METERS = 15;
+// 2026-11-03：從 15 縮到 10 公尺，轉彎提示更接近路口（手機 GPS 誤差約 5～10 公尺，再小會抓不到）。
+const STEP_ARRIVAL_RADIUS_METERS = 10;
+// 萬一 GPS 沒剛好落在 10 公尺內：曾經靠近路口 25 公尺內，之後又離遠 6 公尺，視為已經走過路口，照樣換下一句
+const NEAR_STEP_END_METERS = 25;
+const PASSED_MARGIN_METERS = 6;
 // 多靠近終點才算真正抵達
 const DESTINATION_ARRIVAL_RADIUS_METERS = 15;
 
@@ -433,8 +437,17 @@ function buildStepResult(currentLatitude, currentLongitude) {
             currentStep.endLocation.longitude
         );
 
-        if (distanceToStepEnd <= STEP_ARRIVAL_RADIUS_METERS) {
+        if (session.minDistToStepEnd === undefined ||
+            distanceToStepEnd < session.minDistToStepEnd) {
+            session.minDistToStepEnd = distanceToStepEnd;
+        }
+        const passed =
+            session.minDistToStepEnd <= NEAR_STEP_END_METERS &&
+            distanceToStepEnd > session.minDistToStepEnd + PASSED_MARGIN_METERS;
+
+        if (distanceToStepEnd <= STEP_ARRIVAL_RADIUS_METERS || passed) {
             session.currentStepIndex += 1;
+            session.minDistToStepEnd = undefined;
         } else {
             break;
         }
