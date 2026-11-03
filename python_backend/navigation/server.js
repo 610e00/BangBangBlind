@@ -71,6 +71,17 @@ app.post("/webhook", (req, res) => {
 });
 
 
+// ======================================================
+// 存取密碼（雲端用）：.env / 雲端環境變數設了 APP_API_KEY 才啟用。
+// App 每個請求都帶 x-api-key。本機沒設 APP_API_KEY 就不檢查（和以前一樣）。
+// ======================================================
+app.use("/api", (req, res, next) => {
+    const key = process.env.APP_API_KEY;
+    if (!key) return next();
+    if (req.get("x-api-key") === key) return next();
+    return res.status(401).json({ status: "error", message: "存取密碼錯誤或沒有設定", data: null });
+});
+
 app.use("/api", aiGatewayRoutes);
 app.use("/api", gpsRoutes);
 app.use("/api", safetyRoutes);
@@ -95,7 +106,7 @@ app.get("/", (req, res) => {
 
 
 // 啟動 server
-const PORT = 3000;
+const PORT = process.env.PORT || 3000; // 雲端平台會用環境變數指定埠；本機沒設就是 3000
 
 app.listen(PORT, () => {     //app.listen 啟動 server
     console.log(`Server running on port ${PORT}`);

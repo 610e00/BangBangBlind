@@ -18,15 +18,17 @@ router.post("/user", (req, res) => {
             userModel.createUser();
 
         res.json({
-            success: true,
+            status: "success",
+            message: "使用者建立成功",
             data: result
         });
 
     } catch (error) {
 
         res.status(500).json({
-            success: false,
-            message: error.message
+            status: "error",
+            message: error.message,
+            data: null
         });
 
     }
@@ -47,15 +49,17 @@ router.get("/user", (req, res) => {
             userModel.getAllUsers();
 
         res.json({
-            success: true,
+            status: "success",
+            message: "查詢使用者成功",
             data: users
         });
 
     } catch (error) {
 
         res.status(500).json({
-            success: false,
-            message: error.message
+            status: "error",
+            message: error.message,
+            data: null
         });
 
     }

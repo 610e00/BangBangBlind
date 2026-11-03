@@ -27,6 +27,7 @@ router.post("/decision/check", (req, res) => {
     // 📤 回傳結果
     res.json({
         status: "success",
+        message: "安全決策判斷完成",
         data: {
             safety: safetyData,
             decision: result

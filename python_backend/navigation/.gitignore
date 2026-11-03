@@ -15,3 +15,9 @@ test.db
 
 # Logs
 *.log
+# 備份檔
+*.bak_before_cloud
+*.bak_*
+
+# 執行時產生的資料（含 SOS 紀錄），不進版控
+storage/

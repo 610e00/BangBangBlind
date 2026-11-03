@@ -4,7 +4,6 @@ const express = require("express");
 const router = express.Router();
 
 const gpsService = require("../services/gpsService");
-const axios = require("axios");
 const flowController = require("../services/flowController");
 // 取得目前 GPS
 router.get("/gps", (req, res) => {
@@ -28,78 +27,16 @@ router.post("/gps/update", async (req, res) => {
     return res.json(result);
 });
 
-/**
- * 🌍 Google Maps 真實導航 API
- */
-router.post("/navigation", async (req, res) => {
-
-    try {
-
-        const { latitude, longitude } = req.body;
-
-        // 📍 起點（目前 GPS）
-        const current = gpsService.getCurrentLocation();
-
-        if (current.status !== "success") {
-            return res.json({
-                status: "error",
-                message: "無法取得 GPS"
-            });
-        }
-
-        const origin = `${current.data.latitude},${current.data.longitude}`;
-
-        // 🎯 目的地
-        const destination = `${latitude},${longitude}`;
-
-        // 🌍 呼叫 Google Directions API
-        const response = await axios.get(
-            "https://maps.googleapis.com/maps/api/directions/json",
-            {
-                params: {
-                    origin,
-                    destination,
-                    key: process.env.GOOGLE_MAPS_API_KEY
-                }
-            }
-        );
-
-        const data = response.data;
-        console.log("GOOGLE RESPONSE:", JSON.stringify(data, null, 2));
-
-        // ❌ 沒路線
-        if (!data.routes || data.routes.length === 0) {
-            return res.json({
-                status: "error",
-                message: "查無路線"
-            });
-        }
-
-        // 📦 取第一條路線
-        const route = data.routes[0];
-
-        // 🧭 解析 steps
-        const steps = route.legs[0].steps.map(step => step.html_instructions.replace(/<[^>]*>/g, ""));
-
-        return res.json({
-            status: "success",
-            route: {
-                distance: route.legs[0].distance.text,
-                duration: route.legs[0].duration.text,
-                steps
-            }
-        });
-
-    } catch (error) {
-
-        console.error(error);
-
-        return res.status(500).json({
-            status: "error",
-            message: "導航失敗",
-            error: error.message
-        });
-    }
-});
+// ⚠️ 整合負責人備註（2026-10-03）：
+// 這裡原本有一支 POST /navigation，跟 navigationRoutes.js 的路徑完全相同，
+// 而且 server.js 掛載順序比 navigationRoutes.js 早，造成：
+// 1. navigationRoutes.js 裡同名的那支變成永遠不會被執行的死碼
+// 2. 這支本身雖然會執行，但沒有 GOOGLE_MAPS_API_KEY 金鑰時一定失敗，
+//    而且回傳格式（distance/duration/steps）跟 API_SPEC.md 規定的
+//    /navigation/start 格式（instruction/distance_to_next_cm/arrived）不一樣，
+//    App 端從來沒有真正呼叫過這支
+// 已把這裡真正會動的 Google Maps 呼叫邏輯，整合進
+// navigationRoutes.js 的 POST /navigation/start（也是 API_SPEC.md 指定的正式入口），
+// 現在只保留這支檔案原本就有、真正在用的 /gps、/gps/update。
 
 module.exports = router;

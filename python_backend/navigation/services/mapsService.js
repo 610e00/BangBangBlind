@@ -1,4 +1,10 @@
 // 🎯 負責：處理導航路線（模擬版 + 未來可接 Google Maps API）
+//
+// ⚠️ 2026-10-03 整合負責人備註：已棄用，沒有任何地方呼叫這支了。
+// 真正接 Google Maps 的邏輯已經實作在 services/navigationSessionService.js，
+// routes/navigationRoutes.js 的 /navigation/start 和
+// routes/aiGatewayRoutes.js 的 intent=navigation 現在都改呼叫那支。
+// 保留這個檔案只是為了留個對照，之後確認沒問題可以直接刪除。
 
 /**
  * 取得導航路線
