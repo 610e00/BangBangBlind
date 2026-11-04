@@ -11,11 +11,8 @@ import 'package:video_player/video_player.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'voice_policy.dart';
-import 'live_detection_page.dart';
 
-import 'traffic_api_test_page.dart';
-
-import 'camera_live_test_page.dart';
+import 'camera_edge_fp16_page.dart';
 
 void main() {
   runApp(const BangBangBlindApp());
@@ -30,7 +27,7 @@ class BangBangBlindApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: '幫幫盲 Demo',
       theme: ThemeData(useMaterial3: true),
-      home: const CameraLiveTestPage(),
+      home: const CameraEdgeFp16Page(),
     );
   }
 }

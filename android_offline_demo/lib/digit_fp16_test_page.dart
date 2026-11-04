@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,8 +8,7 @@ class DigitFp16TestPage extends StatefulWidget {
   const DigitFp16TestPage({super.key});
 
   @override
-  State<DigitFp16TestPage> createState() =>
-      _DigitFp16TestPageState();
+  State<DigitFp16TestPage> createState() => _DigitFp16TestPageState();
 }
 
 class _DigitFp16TestPageState extends State<DigitFp16TestPage> {
@@ -26,9 +24,7 @@ class _DigitFp16TestPageState extends State<DigitFp16TestPage> {
   Future<void> recognize() async {
     if (busy) return;
 
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-    );
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
 
     if (picked == null || !mounted) return;
 
@@ -63,9 +59,7 @@ class _DigitFp16TestPageState extends State<DigitFp16TestPage> {
       }
 
       final maxLogit = logits.reduce(math.max);
-      final expValues = logits
-          .map((v) => math.exp(v - maxLogit))
-          .toList();
+      final expValues = logits.map((v) => math.exp(v - maxLogit)).toList();
       final sum = expValues.reduce((a, b) => a + b);
 
       if (!mounted) return;
@@ -90,9 +84,7 @@ class _DigitFp16TestPageState extends State<DigitFp16TestPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('CNN E3 FP16｜單數字測試'),
-      ),
+      appBar: AppBar(title: const Text('CNN E3 FP16｜單數字測試')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -100,17 +92,11 @@ class _DigitFp16TestPageState extends State<DigitFp16TestPage> {
           children: [
             ElevatedButton(
               onPressed: busy ? null : recognize,
-              child: Text(
-                busy ? '辨識中…' : '選擇數字圖片',
-              ),
+              child: Text(busy ? '辨識中…' : '選擇數字圖片'),
             ),
             const SizedBox(height: 20),
             if (imageBytes != null)
-              Image.memory(
-                imageBytes!,
-                height: 220,
-                fit: BoxFit.contain,
-              ),
+              Image.memory(imageBytes!, height: 220, fit: BoxFit.contain),
             const SizedBox(height: 20),
             Text(status, textAlign: TextAlign.center),
             if (predictedDigit != null) ...[
@@ -133,10 +119,7 @@ class _DigitFp16TestPageState extends State<DigitFp16TestPage> {
               ),
             ],
             const SizedBox(height: 20),
-            const Text(
-              '受控測試：此頁面僅辨識單一數字，不提供通行建議。',
-              textAlign: TextAlign.center,
-            ),
+            const Text('受控測試：此頁面僅辨識單一數字，不提供通行建議。', textAlign: TextAlign.center),
           ],
         ),
       ),

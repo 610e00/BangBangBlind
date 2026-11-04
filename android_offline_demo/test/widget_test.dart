@@ -20,10 +20,18 @@ class UnsupportedHdrPlayer extends VideoPlayerController {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(const MethodChannel('flutter_tts'), (
+        MethodCall call,
+      ) async {
+        return 1;
+      });
   testWidgets(
     'Video workflow starts with upload disabled and image route available',
     (tester) async {
-      await tester.pumpWidget(const BangBangBlindApp());
+      await tester.pumpWidget(const MaterialApp(home: VideoDetectionPage()));
       expect(find.text('選擇影片'), findsOneWidget);
       expect(find.text('尚未選擇影片'), findsOneWidget);
       await tester.scrollUntilVisible(

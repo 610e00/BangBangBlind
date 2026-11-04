@@ -14,6 +14,7 @@ class EdgeCountdownTracker {
   int? _anchorSeconds;
   int? _anchorAtMs;
   int? _lastValidAtMs;
+  int? _lastObservedAtMs;
 
   int mismatchCount = 0;
 
@@ -40,11 +41,13 @@ class EdgeCountdownTracker {
     _anchorSeconds = null;
     _anchorAtMs = null;
     _lastValidAtMs = null;
+    _lastObservedAtMs = null;
     mismatchCount = 0;
     state = nextState;
   }
 
-  void observe({
+  /// Returns true only when this observation establishes or updates tracking.
+  bool observe({
     required int seconds,
     required int capturedAtMs,
     required int nowMs,
@@ -53,12 +56,18 @@ class EdgeCountdownTracker {
 
     // 避免使用過期或時間順序異常的影格。
     if (capturedAtMs > nowMs || nowMs - capturedAtMs > trackingTimeoutMs) {
-      return;
+      return false;
+    }
+
+    if (_lastObservedAtMs != null && capturedAtMs <= _lastObservedAtMs!) {
+      return false;
     }
 
     if (seconds < 1 || seconds > maxSeconds) {
-      return;
+      return false;
     }
+
+    _lastObservedAtMs = capturedAtMs;
 
     if (_anchorSeconds == null) {
       if (_candidateSeconds == null ||
@@ -68,7 +77,7 @@ class EdgeCountdownTracker {
         _candidateSeconds = seconds;
         _candidateAtMs = capturedAtMs;
         state = EdgeTrackingState.verifying;
-        return;
+        return false;
       }
 
       final elapsed = capturedAtMs - _candidateAtMs!;
@@ -83,7 +92,7 @@ class EdgeCountdownTracker {
         _candidateSeconds = seconds;
         _candidateAtMs = capturedAtMs;
         state = EdgeTrackingState.verifying;
-        return;
+        return false;
       }
 
       _anchorSeconds = seconds;
@@ -91,18 +100,18 @@ class EdgeCountdownTracker {
       _lastValidAtMs = nowMs;
       mismatchCount = 0;
       state = EdgeTrackingState.tracking;
-      return;
+      return true;
     }
 
     final predicted = predictedAt(capturedAtMs);
-    if (predicted == null) return;
+    if (predicted == null) return false;
 
     final difference = (seconds - predicted).abs();
 
     // 已建立倒數後，不接受大幅增加或減少的秒數。
     if (difference > allowedDifference) {
       mismatchCount++;
-      return;
+      return false;
     }
 
     mismatchCount = 0;
@@ -115,6 +124,7 @@ class EdgeCountdownTracker {
     }
 
     state = EdgeTrackingState.tracking;
+    return true;
   }
 
   void tick(int nowMs) {

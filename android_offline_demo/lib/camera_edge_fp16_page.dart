@@ -12,6 +12,7 @@ import 'package:ultralytics_yolo/ultralytics_yolo.dart';
 import 'countdown_segmenter_service.dart';
 import 'countdown_fp16_service.dart';
 import 'edge_countdown_tracker.dart';
+import 'edge_tts_guard.dart';
 
 class CameraEdgeFp16Page extends StatefulWidget {
   const CameraEdgeFp16Page({super.key});
@@ -67,6 +68,7 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
       if (!mounted || _stopped) return;
       setState(() {
         _tracker.tick(_trackingClock.elapsedMilliseconds);
+        _expireVerifiedCountdown();
         _handleTrackerSpeech();
       });
     });
@@ -271,6 +273,7 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
         _greenConsecutive = 0;
         _greenAnnounced = false;
         _greenIntroFinished = false;
+        _clearVerifiedCountdown();
         _tracker.reset(nextState: EdgeTrackingState.lost);
         _lastVoiceState = EdgeTrackingState.lost;
 
@@ -310,6 +313,7 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
       }
 
       if (countdowns.isEmpty) {
+        _clearVerifiedCountdown();
         if (!mounted || _stopped) return;
 
         setState(() {
@@ -350,13 +354,15 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
       final minConfidence = recognition.confidences.reduce(math.min);
 
       final observedSeconds = recognition.seconds;
-      if (!redDetected && true) {
-        _tracker.observe(
-          seconds: observedSeconds,
-          capturedAtMs: capturedAtMs,
-          nowMs: _trackingClock.elapsedMilliseconds,
-        );
-      }
+      if (!mounted || _stopped) return;
+      final accepted =
+          !_redHold &&
+          !redDetected &&
+          _tracker.observe(
+            seconds: observedSeconds,
+            capturedAtMs: capturedAtMs,
+            nowMs: _trackingClock.elapsedMilliseconds,
+          );
 
       debugPrint(
         'EDGE TRACKER: raw=$observedSeconds '
@@ -365,11 +371,13 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
         'mismatches=${_tracker.mismatchCount}',
       );
 
-      if (!redDetected &&
-          _tracker.state == EdgeTrackingState.tracking &&
-          _tracker.mismatchCount == 0) {
-        _lastGoodCountdownAtMs = _trackingClock.elapsedMilliseconds;
+      if (accepted) {
+        _verifiedCnnSeconds = observedSeconds;
+        _lastGoodCountdownAtMs = capturedAtMs;
+      } else {
+        _clearVerifiedCountdown();
       }
+      _expireVerifiedCountdown();
 
       _handleTrackerSpeech();
       watch.stop();
@@ -379,13 +387,15 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
       setState(() {
         _roiPreview = roi;
         _digitPreviews = List<Uint8List>.from(segmentation.crops);
-        _seconds = recognition.seconds;
-        _digits = recognition.displayText;
+        _seconds = _verifiedCnnSeconds;
+        _digits = _verifiedCnnSeconds?.toString() ?? '--';
         _cnnConfidence = minConfidence;
         _strategy = segmentation.strategy;
         _lightStatus = light;
         _processingMs = watch.elapsedMicroseconds / 1000;
-        _status = '本地推論完成（尚未經連續影格確認）';
+        _status = _verifiedCnnSeconds == null
+            ? '本次讀數未通過追蹤驗證或已過期'
+            : 'CNN 觀測已通過追蹤驗證';
       });
 
       debugPrint(
@@ -395,6 +405,9 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
         'ms=${_processingMs?.toStringAsFixed(1)}',
       );
     } catch (e, stack) {
+      _clearVerifiedCountdown();
+      _tracker.reset(nextState: EdgeTrackingState.lost);
+      _handleTrackerSpeech();
       debugPrint('EDGE FRAME ERROR: $e');
       debugPrintStack(stackTrace: stack);
 
@@ -463,6 +476,8 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
   bool _greenAnnounced = false;
   bool _greenIntroFinished = false;
   int? _lastGoodCountdownAtMs;
+  int? _verifiedCnnSeconds;
+  int? _lastSpokenCnnAtMs;
   static const int _staleSpeechLimitMs = 3000;
 
   bool _ttsSpeaking = false;
@@ -537,6 +552,28 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
     }
   }
 
+  void _clearVerifiedCountdown() {
+    _verifiedCnnSeconds = null;
+    _lastGoodCountdownAtMs = null;
+    _seconds = null;
+    _digits = '--';
+  }
+
+  void _expireVerifiedCountdown() {
+    final capturedAt = _lastGoodCountdownAtMs;
+    final now = _trackingClock.elapsedMilliseconds;
+    if (_redHold ||
+        _tracker.state != EdgeTrackingState.tracking ||
+        capturedAt == null ||
+        now < capturedAt ||
+        now - capturedAt > _staleSpeechLimitMs) {
+      _clearVerifiedCountdown();
+    }
+    if (_tracker.state == EdgeTrackingState.lost) {
+      _shortAnnounced = false;
+    }
+  }
+
   void _handleTrackerSpeech() {
     if (!_ttsReady || !mounted || _stopped || _redHold) {
       return;
@@ -546,8 +583,19 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
     final now = _trackingClock.elapsedMilliseconds;
 
     if (state == EdgeTrackingState.tracking) {
-      // 已確認綠燈時，必須先把「綠燈」播完。
-      if (_greenAnnounced && !_greenIntroFinished) {
+      final canAnnounce = EdgeTtsGuard.canAnnounceCountdown(
+        ttsReady: _ttsReady,
+        redHold: _redHold,
+        greenConsecutive: _greenConsecutive,
+        greenAnnounced: _greenAnnounced,
+        greenIntroFinished: _greenIntroFinished,
+        tracking: _tracker.state == EdgeTrackingState.tracking,
+        mismatchCount: _tracker.mismatchCount,
+        lastGoodCountdownAtMs: _lastGoodCountdownAtMs,
+        nowMs: now,
+      );
+
+      if (!canAnnounce) {
         _lastVoiceState = state;
         return;
       }
@@ -560,33 +608,25 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
         return;
       }
 
-      final remaining = _tracker.predictedAt(now);
-      if (remaining != null && remaining > 0) {
+      final remaining = _verifiedCnnSeconds;
+      final observationAtMs = _lastGoodCountdownAtMs;
+      if (remaining != null &&
+          remaining > 0 &&
+          observationAtMs != null &&
+          _lastSpokenCnnAtMs != observationAtMs) {
         final intervalReached =
             now - _lastCountdownSpeechAtMs >= _countdownSpeechIntervalMs;
-
         final firstWarning = remaining < 15 && !_shortAnnounced;
-
-        // 不把舊秒數放進語音佇列。
         if (!_ttsSpeaking &&
             _pendingTts == null &&
             (intervalReached || firstWarning)) {
-          final latest = _tracker.predictedAt(
-            _trackingClock.elapsedMilliseconds,
+          _lastCountdownSpeechAtMs = now;
+          _lastSpokenCnnAtMs = observationAtMs;
+          if (remaining < 15) _shortAnnounced = true;
+          _speak(
+            remaining < 15 ? '剩餘 $remaining 秒，建議等待' : '剩餘 $remaining 秒',
+            priority: remaining < 15 ? 2 : 1,
           );
-
-          if (latest != null && latest > 0) {
-            _lastCountdownSpeechAtMs = _trackingClock.elapsedMilliseconds;
-
-            if (latest < 15) {
-              _shortAnnounced = true;
-            }
-
-            _speak(
-              latest < 15 ? '剩餘 $latest 秒，建議等待' : '剩餘 $latest 秒',
-              priority: latest < 15 ? 2 : 1,
-            );
-          }
         }
       }
     }
@@ -596,7 +636,7 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
       _greenConsecutive = 0;
       _greenAnnounced = false;
       _greenIntroFinished = false;
-      _lastGoodCountdownAtMs = null;
+      _clearVerifiedCountdown();
 
       _speak('辨識中斷，請等待', priority: 2);
     }
@@ -653,7 +693,7 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
                   Text('燈號：$_lightStatus'),
                   const SizedBox(height: 8),
                   Text(
-                    '原始辨識：$_digits',
+                    '已驗證辨識：$_digits',
                     style: const TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
@@ -674,8 +714,7 @@ class _CameraEdgeFp16PageState extends State<CameraEdgeFp16Page> {
                   const SizedBox(height: 8),
                   Text('追蹤狀態：${_tracker.state.name.toUpperCase()}'),
                   Text(
-                    '本地預估秒數：'
-                    '${_tracker.state == EdgeTrackingState.tracking ? (_tracker.predictedAt(_trackingClock.elapsedMilliseconds)?.toString() ?? "--") : "--"}',
+                    '已驗證 CNN 秒數：${_verifiedCnnSeconds?.toString() ?? "--"}',
                     style: const TextStyle(fontSize: 20),
                   ),
                   Text('連續異常讀數：${_tracker.mismatchCount}'),
