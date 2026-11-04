@@ -1,0 +1,22 @@
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.gradle/
+.idea/
+.DS_Store
+local.properties
+key.properties
+*.jks
+*.keystore
+*.bak
+*.log
+.env
+.env.*
+video_jobs/
+assets/models/backup/
+
+# IDE 與歷史備份
+*.iml
+*.backup_*

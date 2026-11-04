@@ -1,0 +1,124 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:ultralytics_yolo/ultralytics_yolo.dart';
+
+class EdgeYoloTestPage extends StatefulWidget {
+  const EdgeYoloTestPage({super.key});
+
+  @override
+  State<EdgeYoloTestPage> createState() => _EdgeYoloTestPageState();
+}
+
+class _EdgeYoloTestPageState extends State<EdgeYoloTestPage> {
+  final YOLO _yolo = YOLO(
+    modelPath: 'assets/models/traffic_yolov8n_v6_1280.tflite',
+    task: YOLOTask.detect,
+    useGpu: false,
+  );
+
+  bool _loaded = false;
+  bool _busy = false;
+
+  String _status = '模型尚未載入';
+  File? _image;
+  Map<String, dynamic>? _result;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadModel();
+  }
+
+  Future<void> _loadModel() async {
+    try {
+      final success = await _yolo.loadModel();
+
+      if (!mounted) return;
+      setState(() {
+        _loaded = success;
+        _status = success ? '模型載入成功' : '模型載入失敗';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = '模型載入錯誤：$e');
+    }
+  }
+
+  Future<void> _detectImage() async {
+    if (!_loaded || _busy) return;
+
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _busy = true;
+      _image = File(picked.path);
+      _result = null;
+      _status = 'Android YOLO 辨識中…';
+    });
+
+    try {
+      final bytes = await File(picked.path).readAsBytes();
+
+      final result = await _yolo.predict(
+        bytes,
+        confidenceThreshold: 0.10,
+        iouThreshold: 0.50,
+      );
+
+      if (!mounted) return;
+
+      final boxes = result['boxes'] as List? ?? [];
+
+      setState(() {
+        _result = result;
+        _status = '推論完成，回傳 ${boxes.length} 個候選框';
+      });
+
+      debugPrint('Android YOLO result: $result');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = '推論失敗：$e');
+      debugPrint('Android YOLO error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('幫幫盲｜Android Edge YOLO')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Expanded(
+              child: _image == null
+                  ? const Center(child: Text('尚未選擇圖片'))
+                  : Image.file(_image!, fit: BoxFit.contain),
+            ),
+            const SizedBox(height: 12),
+            Text(_status),
+            if (_busy) const CircularProgressIndicator(),
+            if (_result != null)
+              Expanded(
+                child: SingleChildScrollView(
+                  child: SelectableText(_result.toString()),
+                ),
+              ),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: _loaded && !_busy ? _detectImage : null,
+              child: const Text('選擇圖片並在 Android 辨識'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

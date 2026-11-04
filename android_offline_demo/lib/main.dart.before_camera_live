@@ -1,0 +1,812 @@
+import 'dart:convert';
+import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:video_player/video_player.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+
+import 'voice_policy.dart';
+import 'live_detection_page.dart';
+
+import 'traffic_api_test_page.dart';
+
+void main() {
+  runApp(const BangBangBlindApp());
+}
+
+class BangBangBlindApp extends StatelessWidget {
+  const BangBangBlindApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: '幫幫盲 Demo',
+      theme: ThemeData(useMaterial3: true),
+      home: const TrafficApiTestPage(),
+    );
+  }
+}
+
+class DetectionPage extends StatefulWidget {
+  const DetectionPage({super.key, this.serverUrl = 'http://10.0.2.2:8004'});
+  final String serverUrl;
+
+  @override
+  State<DetectionPage> createState() => _DetectionPageState();
+}
+
+class _DetectionPageState extends State<DetectionPage> {
+  File? _selectedImage;
+
+  bool _detecting = false;
+
+  String _status = '請選擇測試圖片';
+
+  List<dynamic> _detections = [];
+
+  Future<void> _pickAndDetect() async {
+    final picker = ImagePicker();
+
+    final pickedImage = await picker.pickImage(source: ImageSource.gallery);
+
+    if (pickedImage == null) {
+      return;
+    }
+
+    final imageFile = File(pickedImage.path);
+
+    setState(() {
+      _selectedImage = imageFile;
+      _detecting = true;
+      _detections = [];
+      _status = 'AI 辨識中...';
+    });
+
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse(widget.serverUrl).resolve('/detect'),
+      );
+
+      request.files.add(
+        await http.MultipartFile.fromPath('file', imageFile.path),
+      );
+
+      final response = await request.send();
+
+      final responseBody = await response.stream.bytesToString();
+
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+
+      final data = jsonDecode(responseBody);
+
+      final detections = data['detections'] ?? [];
+
+      setState(() {
+        _detections = detections;
+        _detecting = false;
+
+        if (detections.isEmpty) {
+          _status = '未偵測到行人號誌';
+        } else {
+          _status = '辨識完成';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _detecting = false;
+        _status = '辨識失敗：$e';
+      });
+    }
+  }
+
+  String _toChinese(String className) {
+    switch (className) {
+      case 'pedestrian_green':
+        return '綠燈';
+
+      case 'pedestrian_red':
+        return '紅燈';
+
+      case 'countdown_timer':
+        return '倒數號誌';
+
+      default:
+        return className;
+    }
+  }
+
+  IconData _getIcon(String className) {
+    switch (className) {
+      case 'pedestrian_green':
+        return Icons.directions_walk;
+
+      case 'pedestrian_red':
+        return Icons.pan_tool_alt;
+
+      case 'countdown_timer':
+        return Icons.timer;
+
+      default:
+        return Icons.visibility;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('幫幫盲｜行人號誌辨識 Demo')),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    color: Colors.black12,
+                  ),
+                  child: _selectedImage == null
+                      ? const Center(
+                          child: Text('尚未選擇圖片', style: TextStyle(fontSize: 18)),
+                        )
+                      : ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: Image.file(
+                            _selectedImage!,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              Text(
+                _status,
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              if (_detecting) const CircularProgressIndicator(),
+
+              if (!_detecting && _detections.isNotEmpty)
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _detections.length,
+                    itemBuilder: (context, index) {
+                      final detection = _detections[index];
+
+                      final className = detection['class_name'].toString();
+
+                      final confidence = (detection['confidence'] as num)
+                          .toDouble();
+
+                      return Card(
+                        child: ListTile(
+                          leading: Icon(_getIcon(className)),
+                          title: Text(_toChinese(className)),
+                          subtitle: Text(
+                            '信心度：'
+                            '${(confidence * 100).toStringAsFixed(1)}%',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
+              const SizedBox(height: 12),
+
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _detecting ? null : _pickAndDetect,
+                  icon: const Icon(Icons.photo_library),
+                  label: const Text('選擇測試圖片'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class VideoDetectionPage extends StatefulWidget {
+  const VideoDetectionPage({
+    super.key,
+    this.pickVideo,
+    this.playerFactory,
+    this.client,
+  });
+  final Future<XFile?> Function()? pickVideo;
+  final VideoPlayerController Function(XFile)? playerFactory;
+  final http.Client? client;
+  @override
+  State<VideoDetectionPage> createState() => _VideoDetectionPageState();
+}
+
+class _VideoDetectionPageState extends State<VideoDetectionPage> {
+  final _server = TextEditingController(text: 'http://10.0.2.2:8004');
+  late final _client = widget.client ?? http.Client();
+  VideoPlayerController? _player;
+  XFile? _file;
+  Uint8List? _preview;
+  double _previewRatio = 9 / 16;
+  Offset? _center;
+  bool _busy = false;
+  bool _result = false;
+  int _cropSize = 400;
+  bool _track = false;
+  double _sourceWidth = 1080;
+  double _sourceHeight = 1920;
+  double? _progress;
+  String _status = '選擇影片，再點選畫面中的主要號誌';
+  Map<String, dynamic>? _summary;
+  final _voicePolicy = VoicePolicy();
+  late final _tts = FlutterTts();
+  List<Map<String, dynamic>> _timeline = [];
+  bool _voiceEnabled = true;
+  bool _wasPlaying = false;
+  double _lastPlayback = -1;
+  int _lastVoiceFrame = -1;
+  int _speechToken = 0;
+  bool _ttsReady = false;
+  String _voiceStatus = '語音隨辨識結果影片播放';
+
+  Future<void> _stopVoice() async {
+    _speechToken++;
+    try {
+      await _tts.stop();
+    } catch (_) {}
+  }
+
+  Future<void> _speak(String text) async {
+    final token = ++_speechToken;
+    try {
+      await _tts.stop();
+      if (!_ttsReady) {
+        if (await _tts.isLanguageAvailable('zh-TW') != true) {
+          if (mounted) setState(() => _voiceStatus = '裝置未提供中文語音，請安裝中文語音資料');
+          return;
+        }
+        await _tts.setLanguage('zh-TW');
+        await _tts.setSpeechRate(.45);
+        await _tts.setVolume(1.0);
+        _ttsReady = true;
+      }
+      if (!mounted || token != _speechToken || !_voiceEnabled) return;
+      setState(() => _voiceStatus = text);
+      await _tts.speak(text);
+    } catch (_) {
+      if (mounted) setState(() => _voiceStatus = '語音無法使用，請檢查裝置語音引擎');
+    }
+  }
+
+  void _onPlayback() {
+    final p = _player;
+    if (p == null || !_result || !_voiceEnabled || _timeline.isEmpty) return;
+    if (!p.value.isPlaying) {
+      if (_wasPlaying) {
+        _stopVoice();
+        _voicePolicy.reset();
+        _lastVoiceFrame = -1;
+      }
+      _wasPlaying = false;
+      return;
+    }
+    _wasPlaying = true;
+    final time = p.value.position.inMilliseconds / 1000;
+    if (time < _lastPlayback || time - _lastPlayback > 1) {
+      _stopVoice();
+      _voicePolicy.reset();
+      _lastVoiceFrame = -1;
+    }
+    _lastPlayback = time;
+    int lo = 0, hi = _timeline.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi + 1) ~/ 2;
+      if ((_timeline[mid]['time_s'] as num).toDouble() <= time) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (lo == _lastVoiceFrame) return;
+    _lastVoiceFrame = lo;
+    final row = _timeline[lo];
+    final text = _voicePolicy.update(
+      row['state'] as String,
+      (row['seconds'] as num?)?.toInt(),
+      time,
+    );
+    if (text != null) _speak(text);
+  }
+
+  @override
+  void dispose() {
+    _client.close();
+    _player?.removeListener(_onPlayback);
+    _stopVoice();
+    _player?.dispose();
+    _server.dispose();
+    super.dispose();
+  }
+
+  Future<void> _selectVideo() async {
+    try {
+      final file =
+          await (widget.pickVideo?.call() ??
+              ImagePicker().pickVideo(source: ImageSource.gallery));
+      if (file == null || !mounted) return;
+      final old = _player;
+      old?.removeListener(_onPlayback);
+      await _stopVoice();
+      _timeline = [];
+      _voicePolicy.reset();
+      _lastVoiceFrame = -1;
+      setState(() {
+        _file = file;
+        _player = null;
+        _preview = null;
+        _center = null;
+        _result = false;
+        _summary = null;
+        _busy = true;
+        _progress = null;
+        _status = '影片已選取，正在準備預覽…';
+      });
+      await old?.dispose();
+      final next =
+          widget.playerFactory?.call(file) ??
+          VideoPlayerController.file(File(file.path));
+      try {
+        await next.initialize().timeout(const Duration(seconds: 15));
+        if (!mounted) {
+          await next.dispose();
+          return;
+        }
+        setState(() {
+          _player = next;
+          _sourceWidth = next.value.size.width;
+          _sourceHeight = next.value.size.height;
+          _status = '點選主要號誌，再按上傳並辨識';
+        });
+      } catch (_) {
+        await next.dispose();
+        if (!mounted) return;
+        setState(() => _status = '此影片無法在手機預覽，正在取得相容的第一幀…');
+        try {
+          final base = Uri.parse(_server.text.trim());
+          final request = http.MultipartRequest(
+            'POST',
+            base.resolve('/video-preview'),
+          );
+          request.files.add(
+            await http.MultipartFile.fromPath('file', file.path),
+          );
+          final response = await _client
+              .send(request)
+              .timeout(const Duration(seconds: 60));
+          final bytes = await response.stream.toBytes().timeout(
+            const Duration(seconds: 60),
+          );
+          if (response.statusCode != 200) {
+            throw Exception('預覽回應 ${response.statusCode}');
+          }
+          final codec = await ui.instantiateImageCodec(bytes);
+          final frame = await codec.getNextFrame();
+          final ratio = frame.image.width / frame.image.height;
+          frame.image.dispose();
+          codec.dispose();
+          if (!mounted) return;
+          setState(() {
+            _preview = bytes;
+            _previewRatio = ratio;
+            _sourceWidth =
+                double.tryParse(response.headers['x-video-width'] ?? '') ??
+                1080;
+            _sourceHeight =
+                double.tryParse(response.headers['x-video-height'] ?? '') ??
+                1920;
+            _status = '已取得影片第一幀，點選號誌後可上傳原始影片';
+          });
+        } catch (_) {
+          if (mounted) setState(() => _status = '影片已選取，預覽不可用；仍可按「上傳並辨識」');
+        }
+      }
+    } catch (e) {
+      if (mounted) setState(() => _status = '選擇影片失敗：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _upload() async {
+    final file = _file;
+    if (file == null) return;
+    final base = Uri.tryParse(_server.text.trim());
+    if (base == null ||
+        !['http', 'https'].contains(base.scheme) ||
+        base.host.isEmpty) {
+      setState(() => _status = '請填寫正確的辨識服務網址');
+      return;
+    }
+    await _player?.pause();
+    if (!mounted) return;
+    setState(() {
+      _busy = true;
+      _progress = null;
+      _status = '影片上傳中…';
+    });
+    try {
+      final request = http.MultipartRequest('POST', base.resolve('/videos'));
+      request.files.add(await http.MultipartFile.fromPath('file', file.path));
+      request.fields['track'] = '$_track';
+      if (_center != null) {
+        request.fields.addAll({
+          'center_x': '${_center!.dx}',
+          'center_y': '${_center!.dy}',
+          'crop_size': '$_cropSize',
+        });
+      }
+      final streamed = await _client
+          .send(request)
+          .timeout(const Duration(minutes: 3));
+      final body = await streamed.stream.bytesToString().timeout(
+        const Duration(minutes: 1),
+      );
+      if (streamed.statusCode != 202) throw Exception('上傳失敗：$body');
+      final id = (jsonDecode(body) as Map<String, dynamic>)['id'];
+      final deadline = DateTime.now().add(const Duration(minutes: 30));
+      while (mounted) {
+        if (DateTime.now().isAfter(deadline)) {
+          throw Exception('處理時間過長，請縮短影片後重試');
+        }
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        final response = await _client
+            .get(base.resolve('/videos/$id'))
+            .timeout(const Duration(seconds: 20));
+        if (response.statusCode != 200) {
+          throw Exception('無法查詢處理進度：${response.body}');
+        }
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (!mounted) return;
+        if (data['status'] == 'error') throw Exception(data['message']);
+        if (data['status'] == 'done') {
+          final timelineResponse = await _client
+              .get(base.resolve(data['results_url'] as String))
+              .timeout(const Duration(seconds: 30));
+          if (timelineResponse.statusCode != 200) throw Exception('無法取得語音辨識紀錄');
+          final timeline = (jsonDecode(timelineResponse.body) as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+          final next = VideoPlayerController.networkUrl(
+            base.resolve(data['video_url'] as String),
+          );
+          try {
+            await next.initialize().timeout(const Duration(seconds: 45));
+          } catch (_) {
+            await next.dispose();
+            rethrow;
+          }
+          if (!mounted) {
+            await next.dispose();
+            return;
+          }
+          final old = _player;
+          old?.removeListener(_onPlayback);
+          _voicePolicy.reset();
+          _lastPlayback = -1;
+          _lastVoiceFrame = -1;
+          _timeline = timeline;
+          setState(() {
+            _player = next;
+            _preview = null;
+            _result = true;
+            _summary = Map<String, dynamic>.from(data['summary'] as Map);
+            _status = [
+              '辨識完成，播放影片查看框、秒數與警示',
+              if (data['region_message'] != null)
+                data['region_message'].toString(),
+            ].join('\n');
+            _progress = 1;
+          });
+          await old?.dispose();
+          next.addListener(_onPlayback);
+          await next.play();
+          break;
+        }
+        setState(() {
+          _progress = ((data['progress'] as num?) ?? 0).toDouble() / 100;
+          _status = data['status'] == 'queued'
+              ? '等待辨識…'
+              : 'AI 辨識中：${data['progress']}%';
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _status = '處理失敗：$e\n請確認電腦後端已開啟、手機和電腦連上同一網路');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final player = _player;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('AI 之眼｜號誌影片辨識'),
+        actions: [
+          IconButton(
+            tooltip: '圖片辨識',
+            onPressed: _busy
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          DetectionPage(serverUrl: _server.text.trim()),
+                    ),
+                  ),
+            icon: const Icon(Icons.image),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          TextField(
+            controller: _server,
+            enabled: !_busy,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: '辨識服務網址',
+              helperText: 'Android 模擬器使用 10.0.2.2:8004；後端目前僅接受本機連線',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          if ((player != null && player.value.isInitialized) ||
+              _preview != null) ...[
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxHeight: 480,
+                  maxWidth: 540,
+                ),
+                child: AspectRatio(
+                  aspectRatio: player?.value.aspectRatio ?? _previewRatio,
+                  child: LayoutBuilder(
+                    builder: (context, size) => GestureDetector(
+                      onTapDown: _busy || _result
+                          ? null
+                          : (details) {
+                              if (player != null &&
+                                  player.value.position.inMilliseconds > 100) {
+                                player.pause();
+                                player.seekTo(Duration.zero);
+                                setState(() => _status = '已回到影片開頭，請再點選主要號誌');
+                                return;
+                              }
+                              setState(
+                                () => _center = Offset(
+                                  (details.localPosition.dx / size.maxWidth)
+                                      .clamp(0.0, 1.0),
+                                  (details.localPosition.dy / size.maxHeight)
+                                      .clamp(0.0, 1.0),
+                                ),
+                              );
+                            },
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (player != null)
+                            VideoPlayer(player)
+                          else
+                            Image.memory(_preview!, fit: BoxFit.contain),
+                          if (_center != null && !_result)
+                            Positioned(
+                              left:
+                                  (_center!.dx * size.maxWidth -
+                                          _cropSize /
+                                              _sourceWidth *
+                                              size.maxWidth /
+                                              2)
+                                      .clamp(
+                                        0.0,
+                                        (size.maxWidth -
+                                                _cropSize /
+                                                    _sourceWidth *
+                                                    size.maxWidth)
+                                            .clamp(0.0, size.maxWidth),
+                                      ),
+                              top:
+                                  (_center!.dy * size.maxHeight -
+                                          _cropSize /
+                                              _sourceHeight *
+                                              size.maxHeight /
+                                              2)
+                                      .clamp(
+                                        0.0,
+                                        (size.maxHeight -
+                                                _cropSize /
+                                                    _sourceHeight *
+                                                    size.maxHeight)
+                                            .clamp(0.0, size.maxHeight),
+                                      ),
+                              width: (_cropSize / _sourceWidth * size.maxWidth)
+                                  .clamp(0.0, size.maxWidth),
+                              height:
+                                  (_cropSize / _sourceHeight * size.maxHeight)
+                                      .clamp(0.0, size.maxHeight),
+                              child: IgnorePointer(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: Colors.amber,
+                                      width: 2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (_center != null && !_result)
+                            Positioned(
+                              left: (_center!.dx * size.maxWidth - 18).clamp(
+                                0.0,
+                                size.maxWidth - 36,
+                              ),
+                              top: (_center!.dy * size.maxHeight - 18).clamp(
+                                0.0,
+                                size.maxHeight - 36,
+                              ),
+                              child: const Icon(
+                                Icons.my_location,
+                                color: Colors.amber,
+                                size: 36,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (player != null)
+              ValueListenableBuilder<VideoPlayerValue>(
+                valueListenable: player,
+                builder: (context, value, _) => Row(
+                  children: [
+                    IconButton(
+                      onPressed: _busy
+                          ? null
+                          : () => value.isPlaying
+                                ? player.pause()
+                                : player.play(),
+                      icon: Icon(
+                        value.isPlaying ? Icons.pause : Icons.play_arrow,
+                      ),
+                    ),
+                    Expanded(
+                      child: VideoProgressIndicator(
+                        player,
+                        allowScrubbing: !_busy,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (!_result) ...[
+              Text(
+                _center == null
+                    ? '未選取號誌：自動定位辨識區域'
+                    : '請確認黃色框包含倒數與紅綠燈。站立影片使用固定區域。',
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('追蹤移動中的號誌'),
+                subtitle: const Text('站立拍攝請關閉，避免辨識區域漂移'),
+                value: _track,
+                onChanged: _busy ? null : (v) => setState(() => _track = v),
+              ),
+              Row(
+                children: [
+                  const Text('裁切大小：'),
+                  DropdownButton<int>(
+                    value: _cropSize,
+                    items: [320, 400, 500, 640]
+                        .map(
+                          (s) => DropdownMenuItem(
+                            value: s,
+                            child: Text('$s × $s'),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _busy
+                        ? null
+                        : (v) => setState(() => _cropSize = v!),
+                  ),
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() => _center = null),
+                    child: const Text('自動定位'),
+                  ),
+                ],
+              ),
+            ],
+          ] else
+            const SizedBox(height: 220, child: Center(child: Text('尚未選擇影片'))),
+          const SizedBox(height: 12),
+          Text(_status, style: const TextStyle(fontWeight: FontWeight.bold)),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('中文語音提示'),
+            value: _voiceEnabled,
+            onChanged: (v) {
+              setState(() => _voiceEnabled = v);
+              _stopVoice();
+              _voicePolicy.reset();
+              _lastVoiceFrame = -1;
+            },
+          ),
+          Text(_voiceStatus),
+          TextButton.icon(
+            onPressed: _voiceEnabled
+                ? () => _speak('語音測試。紅燈請等待，剩餘不到十五秒請等待下一輪。')
+                : null,
+            icon: const Icon(Icons.volume_up),
+            label: const Text('測試語音'),
+          ),
+
+          if (_busy)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: LinearProgressIndicator(value: _progress),
+            ),
+          if (_summary != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                '逐幀結果：紅燈 ${_summary!['red']}｜綠燈且 ≥15 秒 ${_summary!['green']}｜小於 15 秒 ${_summary!['short']}｜未確認 ${_summary!['unknown']}\n以上為模型輸出數量，不代表辨識準確率。',
+              ),
+            ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _busy ? null : _selectVideo,
+            icon: const Icon(Icons.video_library),
+            label: const Text('選擇影片'),
+          ),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _busy || _file == null ? null : _upload,
+            icon: const Icon(Icons.auto_awesome),
+            label: const Text('上傳並辨識'),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            '紅燈：請等待\n綠燈＋14～1 秒：等待下一輪\n綠燈＋15 秒以上：顯示剩餘秒數\n燈號或秒數未確認：請等待\n個位數與兩位數皆由 CNN 辨識；目前個位數仍可能漏讀。',
+          ),
+        ],
+      ),
+    );
+  }
+}
